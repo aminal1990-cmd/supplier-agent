@@ -5,14 +5,14 @@ app = Flask(__name__)
 CORS(app)  # اجازه درخواست از هر دامنه (برای اتصال صفحه)
 
 def run_supplier_agent(query: str):
-    # فعلاً خروجی نمونه (بعداً منطق واقعی را جایگزین می‌کنیم)
+    # تست: نتیجه را بر اساس ورودی برگردان تا مطمئن شویم نسخه جدید روی Render رفته
     return [{
-        "name": "تامین‌کننده نمونه رب گوجه",
-        "country": "ایران",
-        "products": ["رب گوجه 36-38 بریکس"],
-        "contacts": {"email": "sales@example.com", "phone": "+98-21-123456"},
-        "source": "https://example.com",
-        "note": "نمونه تستی"
+        "name": f"نتیجه تست برای: {query}",
+        "country": "—",
+        "products": [],
+        "contacts": {},
+        "source": "",
+        "note": "این پیام یعنی دیپلوی جدید اعمال شده است."
     }]
 
 @app.get("/health")
