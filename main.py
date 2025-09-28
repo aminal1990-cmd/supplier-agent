@@ -14,38 +14,45 @@ def health():
 def search():
     data = request.get_json(force=True, silent=True) or {}
     q = (data.get("query") or data.get("q") or "").strip()
-    print(f"[SEARCH] q='{q}'", file=sys.stderr, flush=True)
+    limit = int(data.get("limit") or 30)
+    exclude = data.get("exclude") or []   # لیست URLهایی که نمی‌خواهیم
+    if not isinstance(exclude, list):
+        exclude = []
+    print(f"[SEARCH] q='{q}' limit={limit} exclude={len(exclude)}", file=sys.stderr, flush=True)
+
     if not q:
         return jsonify({"error": "empty query"}), 400
     try:
-        results = find_suppliers(q)
+        results = find_suppliers(q, limit=limit, exclude=set(exclude))
         print(f"[SEARCH] results={len(results)}", file=sys.stderr, flush=True)
         return jsonify({"results": results})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# گزارش مرحلهٔ جستجو (فقط لینک‌ها، بدون اسکن عمیق سایت‌ها)
 @app.get("/debug")
 def debug():
     q = (request.args.get("q") or "").strip()
+    limit = int(request.args.get("limit") or 30)
+    exclude = request.args.getlist("exclude") or []
     if not q:
         return Response("Add ?q=... to URL", status=400)
     try:
-        report = debug_collect(q)
+        report = debug_collect(q, limit=limit, exclude=set(exclude))
         return Response(json.dumps(report, ensure_ascii=False, indent=2),
                         mimetype="application/json; charset=utf-8")
     except Exception as e:
         traceback.print_exc()
         return Response(str(e), status=500)
 
-# خروجی CSV
 @app.get("/export.csv")
 def export_csv():
     q = (request.args.get("q") or "").strip()
+    limit = int(request.args.get("limit") or 30)
+    exclude = request.args.getlist("exclude") or []
     if not q:
         return Response("q param required", status=400)
-    results = find_suppliers(q)
+    results = find_suppliers(q, limit=limit, exclude=set(exclude))
 
     buf = io.StringIO()
     w = csv.writer(buf)
