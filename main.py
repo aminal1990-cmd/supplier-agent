@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-from agent_logic import find_suppliers
-import csv, io, re
+from agent_logic import find_suppliers, debug_collect
+import csv, io, re, sys, traceback, json
 
 app = Flask(__name__)
 CORS(app)
@@ -14,11 +14,32 @@ def health():
 def search():
     data = request.get_json(force=True, silent=True) or {}
     q = (data.get("query") or data.get("q") or "").strip()
+    print(f"[SEARCH] q='{q}'", file=sys.stderr, flush=True)
     if not q:
         return jsonify({"error": "empty query"}), 400
-    results = find_suppliers(q)
-    return jsonify({"results": results})
+    try:
+        results = find_suppliers(q)
+        print(f"[SEARCH] results={len(results)}", file=sys.stderr, flush=True)
+        return jsonify({"results": results})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
+# گزارش مرحلهٔ جستجو (فقط لینک‌ها، بدون اسکن عمیق سایت‌ها)
+@app.get("/debug")
+def debug():
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return Response("Add ?q=... to URL", status=400)
+    try:
+        report = debug_collect(q)
+        return Response(json.dumps(report, ensure_ascii=False, indent=2),
+                        mimetype="application/json; charset=utf-8")
+    except Exception as e:
+        traceback.print_exc()
+        return Response(str(e), status=500)
+
+# خروجی CSV
 @app.get("/export.csv")
 def export_csv():
     q = (request.args.get("q") or "").strip()
@@ -42,7 +63,6 @@ def export_csv():
             r.get("source") or "",
             r.get("note") or "",
         ])
-
     fname = re.sub(r"[^A-Za-z0-9_\-]+", "_", q)[:40] or "export"
     csv_bytes = buf.getvalue().encode("utf-8-sig")
     return Response(
