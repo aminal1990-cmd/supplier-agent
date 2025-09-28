@@ -1,3 +1,4 @@
+from agent_logic import find_suppliers
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -5,8 +6,8 @@ app = Flask(__name__)
 CORS(app)  # اجازه درخواست از هر دامنه (برای اتصال صفحه)
 
 def run_supplier_agent(query: str):
-    # تست: نتیجه را بر اساس ورودی برگردان تا مطمئن شویم نسخه جدید روی Render رفته
-    return [{
+    # قبلاً خروجی تستی بود. الان تابع واقعی را صدا می‌زنیم:
+    return find_suppliers(query)
         "name": f"نتیجه تست برای: {query}",
         "country": "—",
         "products": [],
