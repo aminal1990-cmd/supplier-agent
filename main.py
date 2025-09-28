@@ -15,11 +15,10 @@ def search():
     data = request.get_json(force=True, silent=True) or {}
     q = (data.get("query") or data.get("q") or "").strip()
     limit = int(data.get("limit") or 30)
-    exclude = data.get("exclude") or []   # لیست URLهایی که نمی‌خواهیم
+    exclude = data.get("exclude") or []
     if not isinstance(exclude, list):
         exclude = []
     print(f"[SEARCH] q='{q}' limit={limit} exclude={len(exclude)}", file=sys.stderr, flush=True)
-
     if not q:
         return jsonify({"error": "empty query"}), 400
     try:
