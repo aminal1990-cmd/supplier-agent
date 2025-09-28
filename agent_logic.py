@@ -1,4 +1,4 @@
-# agent_logic.py — با گزارش دیباگ و فیلترهای شُل‌تر
+# agent_logic.py — ساپلایر ایجنت با دیباگ
 import re, time, random, urllib.parse
 import requests
 from bs4 import BeautifulSoup
@@ -107,7 +107,6 @@ def scrape_site(url):
     out["name"] = guess_name(soup)
     out["contacts"] = extract_contacts_from_html(html)
 
-    # صفحات تماس/درباره
     for p in find_contact_links(url, soup):
         try:
             h = fetch_soft(p, timeout=20)
@@ -118,15 +117,13 @@ def scrape_site(url):
         except Exception:
             continue
 
-    # محصولات: از meta description
     meta = soup.find("meta", attrs={"name":"description"})
     if meta and meta.get("content"):
         out["products"] = [meta["content"][:200]]
     return out
 
-# ===== موتورهای جستجو (بدون API) =====
+# ===== موتورهای جستجو =====
 def google_search(query, want=25):
-    # چند ترفند برای افزایش شانس بدون API
     params = {"q": query, "hl": "fa", "gl": "ir", "num": 20, "udm": "14", "tbs": "li:1"}
     html = fetch_html("https://www.google.com/search", params=params)
     soup = BeautifulSoup(html, "lxml")
@@ -174,7 +171,6 @@ def qwant_search(query, want=25):
     return out
 
 def multi_search(query):
-    # ترتیب: گوگل → داک‌داک → کوانت
     for engine in (google_search, ddg_search, qwant_search):
         try:
             links = engine(query, want=25)
@@ -193,7 +189,7 @@ def dedup(items, limit):
         if len(out) >= limit: break
     return out
 
-# ===== ساخت کوئری‌ها =====
+# ===== کوئری‌ها =====
 def build_queries(q):
     q = q.strip()
     return [
@@ -205,7 +201,7 @@ def build_queries(q):
         f"{q} site:.ir تامین کننده تماس",
     ]
 
-# ===== نقطهٔ ورود اصلی =====
+# ===== نقطه ورود اصلی =====
 def find_suppliers(query: str):
     queries = build_queries(query)
     links = []
@@ -231,14 +227,13 @@ def find_suppliers(query: str):
                 "country": None, "products": [], "contacts": {},
                 "source": s["url"], "note": f"خطا در اسکرپ: {e}"
             })
-    # اولویت به نتایج دارای راه تماس
     def has_contact(x):
         c = x.get("contacts") or {}
         return any([c.get("email"), c.get("phone"), c.get("whatsapp")])
     results.sort(key=lambda x: (not has_contact(x), x.get("name") or ""))
     return results
 
-# ===== گزارش دیباگ: فقط لینک‌های جمع‌آوری شده =====
+# ===== گزارش دیباگ =====
 def debug_collect(query: str):
     qs = build_queries(query)
     report = {"query": query, "tries": [], "picked": []}
