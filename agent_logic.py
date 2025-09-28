@@ -1,13 +1,16 @@
-# agent_logic.py — نسخه Recall (گسترده) برای افزایش نتایج
+# agent_logic.py
+# ساپلایر ایجنت — جستجو در وب (بدون API) + اسکن صفحات برای ایمیل/تلفن.
+# ساده، مودبانه (با مکث کوتاه)، و مقاوم به خطا. خروجی با ساختار ثابت برای UI.
+
 import re, time, random, urllib.parse
 import requests
 from bs4 import BeautifulSoup
 
-# ===== پیکربندی سریع =====
-STRICT_IR = False          # اگر True شود فقط .ir می‌ماند؛ فعلاً False تا نتایج بیشتر بیاید
-REQUIRE_PERSIAN = False    # اگر True شود فقط صفحاتِ خیلی فارسی می‌مانند؛ فعلاً False
-MAX_SITES = 15             # چند سایت را اسکن کنیم
-PAUSE_SEC = (0.4, 0.9)     # مکث مودبانه بین درخواست‌ها
+# ===== پیکربندی =====
+MAX_SITES = 15                 # حداکثر تعداد سایت‌هایی که اسکن می‌کنیم
+PAUSE_SEC = (0.4, 0.9)         # مکث مودبانه بین درخواست‌ها
+REQUIRE_PERSIAN = False        # اگر True شود فقط صفحات خیلی فارسی را نگه می‌دارد
+STRICT_IR = False              # اگر True شود فقط دامنه‌های .ir را نگه می‌دارد
 
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
@@ -31,10 +34,18 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.I)
 PHONE_RE = re.compile(r"(?:\+?\d[\d\-\s()]{6,}\d)")
 PERSIAN_RE = re.compile(r"[\u0600-\u06FF]")
 
+# ===== ابزارهای عمومی =====
 def fetch_html(url, params=None, timeout=25):
     r = requests.get(url, params=params or {}, headers=H(), timeout=timeout)
     r.raise_for_status()
     return r.text
+
+def fetch_soft(url, timeout=25):
+    time.sleep(random.uniform(*PAUSE_SEC))
+    return fetch_html(url, timeout=timeout)
+
+def absolute(base, href):
+    return urllib.parse.urljoin(base, href)
 
 def domain(url):
     from urllib.parse import urlparse
@@ -50,23 +61,73 @@ def is_allowed(url):
 def is_persian(html):
     return len(PERSIAN_RE.findall(html)) >= 40
 
-# ---------- ساخت کوئری‌ها (چند تنوع برای افزایش شانس) ----------
-def build_queries(q):
-    q = q.strip()
-    qs = [
-        f"{q} تامین کننده تماس ایمیل",
-        f"{q} تولیدکننده تماس",
-        f"{q} عمده تماس",
-        f"{q} شرکت تماس",
-        f"{q} قیمت تامین کننده تماس",
-        f"{q} supplier manufacturer contact email",
-        f"{q} distributor wholesaler contact email",
-    ]
-    # نسخه‌های site:.ir هم اضافه می‌کنیم اما اجباریش نمی‌کنیم
-    qs += [f"{q} site:.ir تماس", f"{q} site:.ir تامین کننده"]
-    return qs
+def extract_contacts_from_html(html):
+    emails = set(EMAIL_RE.findall(html))
+    phones = set(PHONE_RE.findall(html))
+    wa = set()
+    if "wa.me" in html or "whatsapp" in html.lower() or "واتساپ" in html:
+        wa.update(phones)
+    return {
+        "email": next(iter(emails), None),
+        "phone": next(iter(phones), None),
+        "whatsapp": next(iter(wa), None)
+    }
 
-# ---------- موتورهای جستجو (بدون API) ----------
+def find_contact_links(base_url, soup):
+    keys = ["contact","تماس","درباره","ارتباط","تماس با ما","ارتباط با ما","contact-us","about"]
+    found = []
+    for a in soup.find_all("a", href=True):
+        text = (a.get_text(" ", strip=True) or "").lower()
+        href = a["href"].lower()
+        if any(k in text for k in keys) or any(k in href for k in keys):
+            found.append(absolute(base_url, a["href"]))
+    uniq = []
+    for u in found:
+        if u not in uniq: uniq.append(u)
+    return uniq[:8]
+
+def guess_name(soup):
+    h1 = soup.find("h1")
+    if h1 and h1.get_text(strip=True): return h1.get_text(strip=True)[:120]
+    if soup.title and soup.title.get_text(strip=True): return soup.title.get_text(strip=True)[:120]
+    og = soup.find("meta", attrs={"property":"og:site_name"})
+    if og and og.get("content"): return og["content"][:120]
+    return ""
+
+def scrape_site(url):
+    out = {"name":"", "country":None, "products":[], "contacts":{}, "source":url, "note":""}
+    try:
+        html = fetch_soft(url, timeout=30)
+    except Exception as e:
+        out["note"] = f"بارگذاری نشد: {e}"
+        return out
+
+    if REQUIRE_PERSIAN and not is_persian(html):
+        out["note"] = "صفحه فارسی نبود/کم‌متن فارسی داشت"
+        return out
+
+    soup = BeautifulSoup(html, "lxml")
+    out["name"] = guess_name(soup)
+    out["contacts"] = extract_contacts_from_html(html)
+
+    # صفحات تماس/درباره
+    for p in find_contact_links(url, soup):
+        try:
+            h = fetch_soft(p, timeout=20)
+            c = extract_contacts_from_html(h)
+            for k, v in c.items():
+                if v and not out["contacts"].get(k):
+                    out["contacts"][k] = v
+        except Exception:
+            continue
+
+    # محصولات: از meta description
+    meta = soup.find("meta", attrs={"name":"description"})
+    if meta and meta.get("content"):
+        out["products"] = [meta["content"][:200]]
+    return out
+
+# ===== جستجوگرها (بدون API) =====
 def google_search(query, want=20):
     params = {"q": query, "hl": "fa", "gl": "ir", "num": 20, "udm": "14", "tbs": "li:1"}
     html = fetch_html("https://www.google.com/search", params=params)
@@ -133,82 +194,27 @@ def dedup(items, limit):
         if len(out) >= limit: break
     return out
 
-# ---------- کمک‌ها ----------
-def absolute(base, href):
-    return urllib.parse.urljoin(base, href)
+# ===== ساخت کوئری‌ها =====
+def build_queries(q):
+    q = q.strip()
+    qs = [
+        f"{q} تامین کننده تماس ایمیل",
+        f"{q} تولیدکننده تماس",
+        f"{q} عمده تماس",
+        f"{q} شرکت تماس",
+        f"{q} supplier manufacturer contact email",
+        f"{q} distributor wholesaler contact email",
+        f"{q} site:.ir تماس", 
+        f"{q} site:.ir تامین کننده",
+    ]
+    return qs
 
-def extract_contacts_from_html(html):
-    emails = set(EMAIL_RE.findall(html))
-    phones = set(PHONE_RE.findall(html))
-    wa = set()
-    if "wa.me" in html or "whatsapp" in html.lower() or "واتساپ" in html:
-        wa.update(phones)
-    return {
-        "email": next(iter(emails), None),
-        "phone": next(iter(phones), None),
-        "whatsapp": next(iter(wa), None)
-    }
-
-def find_contact_links(base_url, soup):
-    keys = ["contact","تماس","درباره","ارتباط","تماس با ما","ارتباط با ما","contact-us","about"]
-    found = []
-    for a in soup.find_all("a", href=True):
-        text = (a.get_text(" ", strip=True) or "").lower()
-        href = a["href"].lower()
-        if any(k in text for k in keys) or any(k in href for k in keys):
-            found.append(absolute(base_url, a["href"]))
-    uniq = []
-    for u in found:
-        if u not in uniq: uniq.append(u)
-    return uniq[:8]
-
-def guess_name(soup):
-    h1 = soup.find("h1")
-    if h1 and h1.get_text(strip=True): return h1.get_text(strip=True)[:120]
-    if soup.title and soup.title.get_text(strip=True): return soup.title.get_text(strip=True)[:120]
-    og = soup.find("meta", attrs={"property":"og:site_name"})
-    if og and og.get("content"): return og["content"][:120]
-    return ""
-
-def fetch_soft(url, timeout=25):
-    time.sleep(random.uniform(*PAUSE_SEC))
-    return fetch_html(url, timeout=timeout)
-
-def scrape_site(url):
-    out = {"name":"", "country":None, "products":[], "contacts":{}, "source":url, "note":""}
-    try:
-        html = fetch_soft(url, timeout=30)
-    except Exception as e:
-        out["note"] = f"بارگذاری نشد: {e}"
-        return out
-
-    if REQUIRE_PERSIAN and not is_persian(html):
-        out["note"] = "صفحه فارسی نبود/کم‌متن فارسی داشت"
-        return out
-
-    soup = BeautifulSoup(html, "lxml")
-    out["name"] = guess_name(soup)
-    out["contacts"] = extract_contacts_from_html(html)
-
-    # صفحات تماس/درباره
-    for p in find_contact_links(url, soup):
-        try:
-            h = fetch_soft(p, timeout=20)
-            c = extract_contacts_from_html(h)
-            for k, v in c.items():
-                if v and not out["contacts"].get(k):
-                    out["contacts"][k] = v
-        except Exception:
-            continue
-
-    # محصولات از meta description
-    meta = soup.find("meta", attrs={"name":"description"})
-    if meta and meta.get("content"):
-        out["products"] = [meta["content"][:200]]
-    return out
-
-# ---------- نقطه ورود ----------
+# ===== نقطه ورود اصلی — حتماً همین امضا را نگه دار =====
 def find_suppliers(query: str):
+    """
+    ورودی: متن محصول/کلیدواژه (فارسی/انگلیسی)
+    خروجی: لیستی از دیکشنری‌ها با کلیدهای: name, country, products(list), contacts{email,phone,whatsapp}, source, note
+    """
     queries = build_queries(query)
     links = []
     for q in queries:
@@ -217,8 +223,7 @@ def find_suppliers(query: str):
         except Exception:
             continue
 
-    # اگر خیلی کم بود، فیلترها را شُل‌تر نکن چون از قبل شله؛ فقط ددآپ کن و برو جلو
-    links = dedup(links, limit=MAX_SITES*2)
+    links = dedup(links, limit=MAX_SITES * 2)
     if not links:
         return [{
             "name": "نتیجه‌ای پیدا نشد.",
@@ -240,8 +245,8 @@ def find_suppliers(query: str):
                 "source": s["url"], "note": f"خطا در اسکرپ: {e}"
             })
 
-    # نتایج دارای ایمیل/شماره را جلوتر نشان بده
-    def has_contact(x): 
+    # اولویت به نتایج دارای راه تماس
+    def has_contact(x):
         c = x.get("contacts") or {}
         return any([c.get("email"), c.get("phone"), c.get("whatsapp")])
     results.sort(key=lambda x: (not has_contact(x), x.get("name") or ""))
