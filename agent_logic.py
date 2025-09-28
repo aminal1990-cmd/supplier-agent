@@ -1,16 +1,13 @@
-# agent_logic.py
-# ساپلایر ایجنت — جستجو در وب (بدون API) + اسکن صفحات برای ایمیل/تلفن.
-# ساده، مودبانه (با مکث کوتاه)، و مقاوم به خطا. خروجی با ساختار ثابت برای UI.
-
+# agent_logic.py — با گزارش دیباگ و فیلترهای شُل‌تر
 import re, time, random, urllib.parse
 import requests
 from bs4 import BeautifulSoup
 
-# ===== پیکربندی =====
-MAX_SITES = 15                 # حداکثر تعداد سایت‌هایی که اسکن می‌کنیم
-PAUSE_SEC = (0.4, 0.9)         # مکث مودبانه بین درخواست‌ها
-REQUIRE_PERSIAN = False        # اگر True شود فقط صفحات خیلی فارسی را نگه می‌دارد
-STRICT_IR = False              # اگر True شود فقط دامنه‌های .ir را نگه می‌دارد
+# ===== تنظیمات سریع =====
+MAX_SITES = 12                 # چند سایت اسکن کنیم
+PAUSE_SEC = (0.4, 0.9)         # مکث مودبانه
+REQUIRE_PERSIAN = False        # فعلاً غیرفعال تا نتایج بیشتر بیاید
+STRICT_IR = False              # فعلاً فقط .ir نباشد
 
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
@@ -34,7 +31,7 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.I)
 PHONE_RE = re.compile(r"(?:\+?\d[\d\-\s()]{6,}\d)")
 PERSIAN_RE = re.compile(r"[\u0600-\u06FF]")
 
-# ===== ابزارهای عمومی =====
+# ===== ابزار عمومی =====
 def fetch_html(url, params=None, timeout=25):
     r = requests.get(url, params=params or {}, headers=H(), timeout=timeout)
     r.raise_for_status()
@@ -127,8 +124,9 @@ def scrape_site(url):
         out["products"] = [meta["content"][:200]]
     return out
 
-# ===== جستجوگرها (بدون API) =====
-def google_search(query, want=20):
+# ===== موتورهای جستجو (بدون API) =====
+def google_search(query, want=25):
+    # چند ترفند برای افزایش شانس بدون API
     params = {"q": query, "hl": "fa", "gl": "ir", "num": 20, "udm": "14", "tbs": "li:1"}
     html = fetch_html("https://www.google.com/search", params=params)
     soup = BeautifulSoup(html, "lxml")
@@ -150,7 +148,7 @@ def google_search(query, want=20):
                 if len(out) >= want: break
     return out
 
-def ddg_search(query, want=20):
+def ddg_search(query, want=25):
     q = urllib.parse.quote_plus(query)
     html = fetch_html(f"https://duckduckgo.com/html/?q={q}")
     soup = BeautifulSoup(html, "lxml")
@@ -163,7 +161,7 @@ def ddg_search(query, want=20):
             if len(out) >= want: break
     return out
 
-def qwant_search(query, want=20):
+def qwant_search(query, want=25):
     q = urllib.parse.quote_plus(query)
     html = fetch_html(f"https://www.qwant.com/?q={q}&t=web")
     soup = BeautifulSoup(html, "lxml")
@@ -176,6 +174,7 @@ def qwant_search(query, want=20):
     return out
 
 def multi_search(query):
+    # ترتیب: گوگل → داک‌داک → کوانت
     for engine in (google_search, ddg_search, qwant_search):
         try:
             links = engine(query, want=25)
@@ -197,24 +196,17 @@ def dedup(items, limit):
 # ===== ساخت کوئری‌ها =====
 def build_queries(q):
     q = q.strip()
-    qs = [
+    return [
         f"{q} تامین کننده تماس ایمیل",
         f"{q} تولیدکننده تماس",
         f"{q} عمده تماس",
-        f"{q} شرکت تماس",
         f"{q} supplier manufacturer contact email",
         f"{q} distributor wholesaler contact email",
-        f"{q} site:.ir تماس", 
-        f"{q} site:.ir تامین کننده",
+        f"{q} site:.ir تامین کننده تماس",
     ]
-    return qs
 
-# ===== نقطه ورود اصلی — حتماً همین امضا را نگه دار =====
+# ===== نقطهٔ ورود اصلی =====
 def find_suppliers(query: str):
-    """
-    ورودی: متن محصول/کلیدواژه (فارسی/انگلیسی)
-    خروجی: لیستی از دیکشنری‌ها با کلیدهای: name, country, products(list), contacts{email,phone,whatsapp}, source, note
-    """
     queries = build_queries(query)
     links = []
     for q in queries:
@@ -222,14 +214,9 @@ def find_suppliers(query: str):
             links += multi_search(q)
         except Exception:
             continue
-
     links = dedup(links, limit=MAX_SITES * 2)
     if not links:
-        return [{
-            "name": "نتیجه‌ای پیدا نشد.",
-            "country": None, "products": [], "contacts": {},
-            "source": "", "note": "عبارت جستجو را تغییر دهید (مثلاً تماس/ایمیل/شهر/استان)."
-        }]
+        return []
 
     results = []
     for s in links[:MAX_SITES]:
@@ -244,11 +231,25 @@ def find_suppliers(query: str):
                 "country": None, "products": [], "contacts": {},
                 "source": s["url"], "note": f"خطا در اسکرپ: {e}"
             })
-
     # اولویت به نتایج دارای راه تماس
     def has_contact(x):
         c = x.get("contacts") or {}
         return any([c.get("email"), c.get("phone"), c.get("whatsapp")])
     results.sort(key=lambda x: (not has_contact(x), x.get("name") or ""))
-
     return results
+
+# ===== گزارش دیباگ: فقط لینک‌های جمع‌آوری شده =====
+def debug_collect(query: str):
+    qs = build_queries(query)
+    report = {"query": query, "tries": [], "picked": []}
+    pool = []
+    for q in qs:
+        try:
+            lst = multi_search(q)
+            report["tries"].append({"q": q, "count": len(lst)})
+            pool += lst
+        except Exception as e:
+            report["tries"].append({"q": q, "error": str(e)})
+    picked = dedup(pool, limit=MAX_SITES * 2)
+    report["picked"] = picked
+    return report
