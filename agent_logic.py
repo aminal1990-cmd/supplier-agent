@@ -126,4 +126,124 @@ def multi_search(query):
 def dedup(items, limit):
     seen, out = set(), []
     for it in items:
-        url = it["url"].s
+        url = it["url"].split("#")[0]
+        if not is_allowed(url): continue
+        if url in seen: continue
+        seen.add(url); out.append(it)
+        if len(out) >= limit: break
+    return out
+
+# ---------- کمک‌ها ----------
+def absolute(base, href):
+    return urllib.parse.urljoin(base, href)
+
+def extract_contacts_from_html(html):
+    emails = set(EMAIL_RE.findall(html))
+    phones = set(PHONE_RE.findall(html))
+    wa = set()
+    if "wa.me" in html or "whatsapp" in html.lower() or "واتساپ" in html:
+        wa.update(phones)
+    return {
+        "email": next(iter(emails), None),
+        "phone": next(iter(phones), None),
+        "whatsapp": next(iter(wa), None)
+    }
+
+def find_contact_links(base_url, soup):
+    keys = ["contact","تماس","درباره","ارتباط","تماس با ما","ارتباط با ما","contact-us","about"]
+    found = []
+    for a in soup.find_all("a", href=True):
+        text = (a.get_text(" ", strip=True) or "").lower()
+        href = a["href"].lower()
+        if any(k in text for k in keys) or any(k in href for k in keys):
+            found.append(absolute(base_url, a["href"]))
+    uniq = []
+    for u in found:
+        if u not in uniq: uniq.append(u)
+    return uniq[:8]
+
+def guess_name(soup):
+    h1 = soup.find("h1")
+    if h1 and h1.get_text(strip=True): return h1.get_text(strip=True)[:120]
+    if soup.title and soup.title.get_text(strip=True): return soup.title.get_text(strip=True)[:120]
+    og = soup.find("meta", attrs={"property":"og:site_name"})
+    if og and og.get("content"): return og["content"][:120]
+    return ""
+
+def fetch_soft(url, timeout=25):
+    time.sleep(random.uniform(*PAUSE_SEC))
+    return fetch_html(url, timeout=timeout)
+
+def scrape_site(url):
+    out = {"name":"", "country":None, "products":[], "contacts":{}, "source":url, "note":""}
+    try:
+        html = fetch_soft(url, timeout=30)
+    except Exception as e:
+        out["note"] = f"بارگذاری نشد: {e}"
+        return out
+
+    if REQUIRE_PERSIAN and not is_persian(html):
+        out["note"] = "صفحه فارسی نبود/کم‌متن فارسی داشت"
+        return out
+
+    soup = BeautifulSoup(html, "lxml")
+    out["name"] = guess_name(soup)
+    out["contacts"] = extract_contacts_from_html(html)
+
+    # صفحات تماس/درباره
+    for p in find_contact_links(url, soup):
+        try:
+            h = fetch_soft(p, timeout=20)
+            c = extract_contacts_from_html(h)
+            for k, v in c.items():
+                if v and not out["contacts"].get(k):
+                    out["contacts"][k] = v
+        except Exception:
+            continue
+
+    # محصولات از meta description
+    meta = soup.find("meta", attrs={"name":"description"})
+    if meta and meta.get("content"):
+        out["products"] = [meta["content"][:200]]
+    return out
+
+# ---------- نقطه ورود ----------
+def find_suppliers(query: str):
+    queries = build_queries(query)
+    links = []
+    for q in queries:
+        try:
+            links += multi_search(q)
+        except Exception:
+            continue
+
+    # اگر خیلی کم بود، فیلترها را شُل‌تر نکن چون از قبل شله؛ فقط ددآپ کن و برو جلو
+    links = dedup(links, limit=MAX_SITES*2)
+    if not links:
+        return [{
+            "name": "نتیجه‌ای پیدا نشد.",
+            "country": None, "products": [], "contacts": {},
+            "source": "", "note": "عبارت جستجو را تغییر دهید (مثلاً تماس/ایمیل/شهر/استان)."
+        }]
+
+    results = []
+    for s in links[:MAX_SITES]:
+        try:
+            item = scrape_site(s["url"])
+            if not item["name"]:
+                item["name"] = s.get("title") or s["url"]
+            results.append(item)
+        except Exception as e:
+            results.append({
+                "name": s.get("title") or s.get("url"),
+                "country": None, "products": [], "contacts": {},
+                "source": s["url"], "note": f"خطا در اسکرپ: {e}"
+            })
+
+    # نتایج دارای ایمیل/شماره را جلوتر نشان بده
+    def has_contact(x): 
+        c = x.get("contacts") or {}
+        return any([c.get("email"), c.get("phone"), c.get("whatsapp")])
+    results.sort(key=lambda x: (not has_contact(x), x.get("name") or ""))
+
+    return results
