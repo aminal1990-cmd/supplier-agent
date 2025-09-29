@@ -234,7 +234,7 @@ def build_queries(q, only_ir=True):
 def find_suppliers(query: str, limit: int = 30, exclude: set = None, engine_order=("google","startpage","ddg_lite")):
     exclude = exclude or set()
     pool = []
-    for qq in build_queries(query.strip(), only_ir=True):
+    for qq in build_queries(query.strip(), only_ir=False):
         pool += multi_search(qq, only_ir=True, engine_order=engine_order, need=80)
     links = dedup(pool, limit=limit*3, exclude=exclude)
 
@@ -273,8 +273,8 @@ def debug_collect(query: str, limit: int = 30, exclude: set = None, engine_order
     exclude = exclude or set()
     rep = {"query": query, "tries": [], "picked": []}
     pool = []
-    for qq in build_queries(query.strip(), only_ir=True):
-        lst = multi_search(qq, only_ir=True, engine_order=engine_order, need=80)
+    for qq in build_queries(query.strip(), only_ir=False):
+        lst = multi_search(qq, only_ir=False, engine_order=engine_order, need=80)
         rep["tries"].append({"q": qq, "count": len(lst)})
         pool += lst
     picked = dedup(pool, limit=limit*3, exclude=exclude)
