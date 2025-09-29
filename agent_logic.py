@@ -1,10 +1,10 @@
-# agent_logic.py — Supplier Agent (ایران-محور + fallback) با حداقل N نتیجه و حذف تکراری‌ها
+# agent_logic.py — Supplier Agent (ایران‌محور + fallback) با engine قابل انتخاب
 import re, time, random, urllib.parse
 import requests
 from bs4 import BeautifulSoup
 
-# ---------- تنظیمات کلی ----------
-PAUSE = (0.45, 1.1)  # مکث مودبانه بین درخواست‌ها
+# ===== تنظیمات =====
+PAUSE = (0.45, 1.1)  # مکث مودبانه
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
@@ -71,7 +71,8 @@ def extract_contacts(html):
         np = normalize_phone_ir(p)
         if np and np not in phones: phones.append(np)
     whats = None
-    if ("wa.me" in html) or ("whatsapp" in html.lower()) or ("واتساپ" in html): whats = next(iter(phones), None)
+    if ("wa.me" in html) or ("whatsapp" in html.lower()) or ("واتساپ" in html):
+        whats = next(iter(phones), None)
     return {"email": (emails[0] if emails else None), "phone": (phones[0] if phones else None), "whatsapp": whats}
 
 def contact_links(base, soup):
@@ -81,7 +82,6 @@ def contact_links(base, soup):
         txt = (a.get_text(" ", strip=True) or "").lower(); href = a["href"].lower()
         if any(k in txt for k in keys) or any(k in href for k in keys):
             out.append(absolute(base, a["href"]))
-    # dedup
     uniq = []; [uniq.append(u) for u in out if u not in uniq]
     return uniq[:6]
 
@@ -115,30 +115,44 @@ def scrape_site(url, require_persian=False):
     if meta and meta.get("content"): out["products"] = [meta["content"][:200]]
     return out
 
-# ---------- موتورهای جستجو (بدون API) ----------
-def google_search(q, want=30, only_ir=True):
+# ===== موتورهای جست‌وجو (HTML) =====
+def google_search(q, want=40, only_ir=True):
     params = {"q": q, "hl":"fa", "gl":"ir", "num":20, "udm":"14", "tbs":"li:1"}
     html = fetch("https://www.google.com/search", params=params)
     soup = BeautifulSoup(html, "lxml")
     out = []
-    for a in soup.select("a[href]"):
+    for a in soup.select("a[href^='http']"):
         href = a.get("href","")
-        if not href.startswith("http"): continue
         if not is_allowed(href, only_ir): continue
-        txt = (a.get_text(" ", strip=True) or "")
-        if txt and len(txt) < 2: continue
-        out.append({"title": txt[:120] or href, "url": href})
+        t = (a.get_text(" ", strip=True) or "").strip()
+        if not t: continue
+        out.append({"title": t[:120], "url": href})
         if len(out) >= want: break
     if not out:
-        for g in soup.select("div.g a[href]"):
+        for g in soup.select("div.g a[href^='http']"):
             href = g.get("href","")
-            if href.startswith("http") and is_allowed(href, only_ir):
+            if is_allowed(href, only_ir):
                 t = g.get_text(" ", strip=True)
                 out.append({"title": t[:120] or href, "url": href})
                 if len(out) >= want: break
     return out
 
-def ddg_search(q, want=30, only_ir=True):
+def startpage_search(query: str, want=40, only_ir=True):
+    q = urllib.parse.quote_plus(query)
+    html = fetch(f"https://www.startpage.com/sp/search?query={q}&language=fa")
+    soup = BeautifulSoup(html, "lxml")
+    out = []
+    for a in soup.select("a[href^='http']"):
+        href = a.get("href")
+        if not href: continue
+        if not is_allowed(href, only_ir): continue
+        t = (a.get_text(" ", strip=True) or "").strip()
+        if not t: continue
+        out.append({"title": t[:120], "url": href})
+        if len(out) >= want: break
+    return out
+
+def ddg_search(q, want=40, only_ir=True):
     qq = urllib.parse.quote_plus(q)
     html = fetch(f"https://duckduckgo.com/html/?q={qq}")
     soup = BeautifulSoup(html, "lxml")
@@ -151,12 +165,21 @@ def ddg_search(q, want=30, only_ir=True):
         if len(out) >= want: break
     return out
 
-def multi_search(q, only_ir=True):
-    for eng in (google_search, ddg_search):
+def multi_search(q, only_ir=True, engine_order=("google","startpage","ddg")):
+    for name in engine_order:
         try:
-            links = eng(q, want=40, only_ir=only_ir)
-            if links: return links
-        except Exception: continue
+            if name == "google":
+                links = google_search(q, want=40, only_ir=only_ir)
+            elif name == "startpage":
+                links = startpage_search(q, want=40, only_ir=only_ir)
+            elif name == "ddg":
+                links = ddg_search(q, want=40, only_ir=only_ir)
+            else:
+                continue
+            if links:
+                return links
+        except Exception:
+            continue
     return []
 
 def dedup(items, limit, exclude:set):
@@ -169,28 +192,28 @@ def dedup(items, limit, exclude:set):
         if len(out) >= limit: break
     return out
 
-# ---------- ساخت کوئری‌ها ----------
+# ===== کوئری‌ساز =====
 def build_queries(q, only_ir=True):
+    tag = "site:.ir " if only_ir else ""
     base = [
-        f"{q} کارخانه {'site:.ir ' if only_ir else ''}تماس",
-        f"{q} تولیدکننده {'site:.ir ' if only_ir else ''}تماس ایمیل",
-        f"{q} تامین کننده {'site:.ir ' if only_ir else ''}ارتباط با ما",
-        f"{q} شرکت {q} {'site:.ir ' if only_ir else ''}تماس",
-        f"{q} عمده {'site:.ir ' if only_ir else ''}تماس",
-        f"{q} supplier {'site:.ir ' if only_ir else ''}contact email",
+        f"{q} کارخانه {tag}تماس",
+        f"{q} تولیدکننده {tag}تماس ایمیل",
+        f"{q} تامین کننده {tag}ارتباط با ما",
+        f"{q} شرکت {q} {tag}تماس",
+        f"{q} عمده {tag}تماس",
+        f"{q} supplier {tag}contact email",
     ]
     cities = ["تهران","اصفهان","مشهد","شیراز","تبریز","کرج"]
-    base += [f"{q} کارخانه {c} {'site:.ir ' if only_ir else ''}تماس" for c in cities]
+    base += [f"{q} کارخانه {c} {tag}تماس" for c in cities]
     return base
 
-# ---------- نقطه ورود اصلی ----------
-def find_suppliers(query: str, limit: int = 30, exclude: set = None):
+# ===== نقطهٔ ورود اصلی =====
+def find_suppliers(query: str, limit: int = 30, exclude: set = None, engine_order=("google","startpage","ddg")):
     exclude = exclude or set()
-
-    # مرحله A: تلاش سفت (فقط .ir + صفحه فارسی)
+    # مرحله A: سفت — فقط .ir و صفحه فارسی
     pool = []
     for qq in build_queries(query.strip(), only_ir=True):
-        try: pool += multi_search(qq, only_ir=True)
+        try: pool += multi_search(qq, only_ir=True, engine_order=engine_order)
         except Exception: continue
     links = dedup(pool, limit=limit*3, exclude=exclude)
 
@@ -211,42 +234,33 @@ def find_suppliers(query: str, limit: int = 30, exclude: set = None):
     if links:
         results = scan(links, require_persian=True)
 
-    # اگر هنوز تعداد کم‌تر از limit بود → مرحله B: شُل‌تر (بدون .ir و بدون الزام فارسی)
-    if len([r for r in results if r.get("name") or r.get("contacts")]) < limit:
+    # مرحله B: fallback — دامنه آزاد و بدون الزام فارسی (برای پر شدن نتایج)
+    if len(results) < limit:
         pool2 = []
         for qq in build_queries(query.strip(), only_ir=False):
-            try: pool2 += multi_search(qq, only_ir=False)
+            try: pool2 += multi_search(qq, only_ir=False, engine_order=engine_order)
             except Exception: continue
-        # از exclude و لینک‌های قبلی عبور نکنیم
         seen_urls = exclude.union({r["source"] for r in results if r.get("source")})
         links2 = dedup(pool2, limit=limit*4, exclude=seen_urls)
-        fallback = scan(links2, require_persian=False)
-        # اضافه کن ولی از تکرار اجتناب کن
-        existing = {r["source"] for r in results if r.get("source")}
-        for r in fallback:
-            if r.get("source") not in existing:
-                results.append(r)
-                existing.add(r.get("source"))
+        results += scan(links2, require_persian=False)
 
-    # مرتب‌سازی: راه تماس‌دارها جلوتر
+    # مرتب‌سازی:‌ اولویت با داشتن راه تماس
     def has_contact(x):
         c = x.get("contacts") or {}
         return bool(c.get("email") or c.get("phone") or c.get("whatsapp"))
     results = results[:limit*2]
     results.sort(key=lambda x: (not has_contact(x), x.get("name") or ""))
 
-    # برگردان حداکثر limit
-    out = results[:limit]
-    return out
+    return results[:limit]
 
-# ---------- گزارش دیباگ ----------
-def debug_collect(query: str, limit: int = 30, exclude: set = None):
+# ===== گزارش برای /debug =====
+def debug_collect(query: str, limit: int = 30, exclude: set = None, engine_order=("google","startpage","ddg")):
     exclude = exclude or set()
     rep = {"query": query, "tries": [], "picked": []}
     pool = []
     for qq in build_queries(query.strip(), only_ir=True):
         try:
-            lst = multi_search(qq, only_ir=True)
+            lst = multi_search(qq, only_ir=True, engine_order=engine_order)
             rep["tries"].append({"q": qq, "count": len(lst)})
             pool += lst
         except Exception as e:
@@ -256,7 +270,7 @@ def debug_collect(query: str, limit: int = 30, exclude: set = None):
         pool2 = []
         for qq in build_queries(query.strip(), only_ir=False):
             try:
-                lst = multi_search(qq, only_ir=False)
+                lst = multi_search(qq, only_ir=False, engine_order=engine_order)
                 rep["tries"].append({"q": qq, "count": len(lst)})
                 pool2 += lst
             except Exception as e:
