@@ -245,6 +245,21 @@ def debug_engine():
             return jsonify({"error":"unknown engine"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+# CORS محکم‌تر برای اجرای از file:// یا دامنه‌های مختلف
+@app.after_request
+def add_cors_headers(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
+@app.errorhandler(500)
+def h500(e):
+    return jsonify({"error": "server_error", "detail": str(e)}), 500
+
+@app.route("/search", methods=["OPTIONS"])
+def search_preflight():
+    return ("", 204)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
