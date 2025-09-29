@@ -173,22 +173,25 @@ def ddg_search(q, want=40, only_ir=True):
         if len(out) >= want: break
     return out
 
-def multi_search(q, only_ir=True, engine_order=("google","startpage","ddg")):
+def multi_search(q, only_ir=True, engine_order=("google","startpage","ddg"), need=40):
+    pool = []
     for name in engine_order:
         try:
             if name == "google":
-                links = google_search(q, want=40, only_ir=only_ir)
+                links = google_search(q, want=need, only_ir=only_ir)
             elif name == "startpage":
-                links = startpage_search(q, want=40, only_ir=only_ir)
+                links = startpage_search(q, want=need, only_ir=only_ir)
             elif name == "ddg":
-                links = ddg_search(q, want=40, only_ir=only_ir)
+                links = ddg_search(q, want=need, only_ir=only_ir)
             else:
                 continue
-            if links:
-                return links
+            pool.extend(links or [])
+            # اگر به اندازه کافی لینک داریم، ادامه لازم نیست
+            if len(pool) >= need:
+                break
         except Exception:
             continue
-    return []
+    return pool
 
 def dedup(items, limit, exclude:set):
     seen, out = set(), []
