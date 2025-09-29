@@ -201,16 +201,26 @@ def generic_extract_links(html: str, only_ir: bool, want: int = 60):
 # ===== موتورهای جست‌وجو =====
 def startpage_search(query: str, want=60, only_ir=True):
     q = urllib.parse.quote_plus(query)
-    html = fetch(f"https://www.startpage.com/sp/search?query={q}&language=fa")
+    base = "https://www.startpage.com"
+    html = fetch(f"{base}/sp/search?query={q}&language=fa")
     soup = BeautifulSoup(html, "lxml")
     out = []
 
+    def norm_href(href: str) -> str:
+        href = href or ""
+        # اگر نسبی بود، کاملش کن
+        if href.startswith("/"):
+            href = base + href
+        # لینک‌های /rd/ را به مقصد واقعی باز کن
+        href = clean_startpage_href(href)
+        return href
+
     # نتایج استاندارد
     for r in soup.select(".w-gl__result"):
-        a = r.select_one("a.w-gl__result-title") or r.select_one("a[href^='http']")
+        a = r.select_one("a.w-gl__result-title") or r.select_one("a[href]")
         if not a:
             continue
-        href = clean_startpage_href(a.get("href") or "")
+        href = norm_href(a.get("href"))
         if not href.startswith("http"):
             continue
         if not is_allowed(href, only_ir):
@@ -222,19 +232,36 @@ def startpage_search(query: str, want=60, only_ir=True):
 
     # فالبک عمومی اگر خالی بود
     if not out:
-        out = generic_extract_links(html, only_ir, want)
-
+        for a in soup.select("a[href]"):
+            href = norm_href(a.get("href"))
+            if not href.startswith("http"):
+                continue
+            if not is_allowed(href, only_ir):
+                continue
+            title = (a.get_text(" ", strip=True) or href)[:120]
+            out.append({"title": title, "url": href})
+            if len(out) >= want:
+                break
     return out
 
 def ddg_lite_search(q: str, want=60, only_ir=True):
     qq = urllib.parse.quote_plus(q)
+    base = "https://duckduckgo.com"
     html = fetch(f"https://lite.duckduckgo.com/lite/?q={qq}")
     soup = BeautifulSoup(html, "lxml")
     out = []
 
-    # ساختارهای رایج
-    for a in soup.select("a.result-link, td.result-link a, a[href^='http']"):
-        href = clean_ddg_href(a.get("href") or "")
+    def norm_href(href: str) -> str:
+        href = href or ""
+        # اگر نسبی بود، کاملش کن (مثل /l/?uddg=...)
+        if href.startswith("/"):
+            href = base + href
+        # لینک /l/?uddg=... را به مقصد واقعی باز کن
+        href = clean_ddg_href(href)
+        return href
+
+    for a in soup.select("a.result-link, td.result-link a, a[href]"):
+        href = norm_href(a.get("href"))
         if not href.startswith("http"):
             continue
         if not is_allowed(href, only_ir):
@@ -248,8 +275,17 @@ def ddg_lite_search(q: str, want=60, only_ir=True):
 
     # فالبک عمومی اگر لازم شد
     if not out:
-        out = generic_extract_links(html, only_ir, want)
-
+        # لینک‌های عمومی صفحه (با نرمال‌سازی)
+        for a in soup.select("a[href]"):
+            href = norm_href(a.get("href"))
+            if not href.startswith("http"):
+                continue
+            if not is_allowed(href, only_ir):
+                continue
+            title = (a.get_text(" ", strip=True) or href)[:120]
+            out.append({"title": title, "url": href})
+            if len(out) >= want:
+                break
     return out
 
 def google_search(q: str, want=40, only_ir=True):
