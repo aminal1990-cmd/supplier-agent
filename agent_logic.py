@@ -142,14 +142,22 @@ def startpage_search(query: str, want=40, only_ir=True):
     html = fetch(f"https://www.startpage.com/sp/search?query={q}&language=fa")
     soup = BeautifulSoup(html, "lxml")
     out = []
-    for a in soup.select("a[href^='http']"):
+    # نتایج اصلی استارت‌پیج
+    for r in soup.select(".w-gl__result"):
+        a = r.select_one("a.w-gl__result-title")
+        if not a: 
+            a = r.select_one("a[href^='http']")  # fallback
+        if not a: 
+            continue
         href = a.get("href")
-        if not href: continue
-        if not is_allowed(href, only_ir): continue
-        t = (a.get_text(" ", strip=True) or "").strip()
-        if not t: continue
-        out.append({"title": t[:120], "url": href})
-        if len(out) >= want: break
+        if not href or not href.startswith("http"):
+            continue
+        if not is_allowed(href, only_ir):
+            continue
+        title = a.get_text(" ", strip=True) or href
+        out.append({"title": title[:120], "url": href})
+        if len(out) >= want:
+            break
     return out
 
 def ddg_search(q, want=40, only_ir=True):
