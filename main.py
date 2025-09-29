@@ -1,7 +1,10 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-from agent_logic import find_suppliers, debug_collect
 import csv, io, re, sys, traceback, json
+
+# منطق ایجنت
+import agent_logic as al
+from agent_logic import find_suppliers, debug_collect
 
 app = Flask(__name__)
 CORS(app)
@@ -16,14 +19,23 @@ def search():
     q = (data.get("query") or data.get("q") or "").strip()
     limit = int(data.get("limit") or 30)
     exclude = data.get("exclude") or []
+    engine = (data.get("engine") or "auto").strip().lower()
+
     if not isinstance(exclude, list):
         exclude = []
-    print(f"[SEARCH] q='{q}' limit={limit} exclude={len(exclude)}", file=sys.stderr, flush=True)
     if not q:
         return jsonify({"error": "empty query"}), 400
+
+    # ترتیب موتور جستجو بر اساس ورودی کاربر
+    if engine in ("google","startpage","ddg"):
+        engine_order = (engine,)
+    else:
+        engine_order = ("google","startpage","ddg")  # حالت Auto
+
+    print(f"[SEARCH] q='{q}' limit={limit} exclude={len(exclude)} engine={engine_order}", file=sys.stderr, flush=True)
+
     try:
-        results = find_suppliers(q, limit=limit, exclude=set(exclude))
-        print(f"[SEARCH] results={len(results)}", file=sys.stderr, flush=True)
+        results = find_suppliers(q, limit=limit, exclude=set(exclude), engine_order=engine_order)
         return jsonify({"results": results})
     except Exception as e:
         traceback.print_exc()
@@ -33,11 +45,19 @@ def search():
 def debug():
     q = (request.args.get("q") or "").strip()
     limit = int(request.args.get("limit") or 30)
+    engine = (request.args.get("engine") or "auto").strip().lower()
     exclude = request.args.getlist("exclude") or []
+
     if not q:
         return Response("Add ?q=... to URL", status=400)
+
+    if engine in ("google","startpage","ddg"):
+        engine_order = (engine,)
+    else:
+        engine_order = ("google","startpage","ddg")
+
     try:
-        report = debug_collect(q, limit=limit, exclude=set(exclude))
+        report = debug_collect(q, limit=limit, exclude=set(exclude), engine_order=engine_order)
         return Response(json.dumps(report, ensure_ascii=False, indent=2),
                         mimetype="application/json; charset=utf-8")
     except Exception as e:
@@ -48,10 +68,18 @@ def debug():
 def export_csv():
     q = (request.args.get("q") or "").strip()
     limit = int(request.args.get("limit") or 30)
+    engine = (request.args.get("engine") or "auto").strip().lower()
     exclude = request.args.getlist("exclude") or []
+
     if not q:
         return Response("q param required", status=400)
-    results = find_suppliers(q, limit=limit, exclude=set(exclude))
+
+    if engine in ("google","startpage","ddg"):
+        engine_order = (engine,)
+    else:
+        engine_order = ("google","startpage","ddg")
+
+    results = find_suppliers(q, limit=limit, exclude=set(exclude), engine_order=engine_order)
 
     buf = io.StringIO()
     w = csv.writer(buf)
